@@ -2,14 +2,14 @@ use std::future::Future;
 use std::thread::available_parallelism;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use edge_executor::Executor;
+use edge_executor::{Executor, UnboundQueue};
 use futures_lite::{future, prelude::*};
 
 const TASKS: usize = 300;
 const STEPS: usize = 300;
 const LIGHT_TASKS: usize = 25_000;
 
-static EX: Executor<'_, 30000> = Executor::new();
+static EX: Executor<UnboundQueue> = Executor::new();
 
 fn run(f: impl FnOnce(), multithread: bool) {
     let limit = if multithread {

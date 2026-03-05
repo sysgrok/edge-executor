@@ -1,13 +1,8 @@
-#![cfg_attr(not(feature = "std"), no_std)]
-
-#[cfg(all(feature = "heapless", feature = "unbounded"))]
-compile_error!("Feature `heapless` is not compatible with feature `unbounded`.");
+#![no_std]
 
 use core::future::{poll_fn, Future};
 use core::marker::PhantomData;
 use core::task::{Context, Poll};
-
-extern crate alloc;
 
 use alloc::rc::Rc;
 
@@ -27,6 +22,12 @@ use once_cell::sync::OnceCell;
 
 #[cfg(feature = "std")]
 pub use futures_lite::future::block_on;
+
+pub use queue::*;
+
+extern crate alloc;
+
+mod queue;
 
 /// An async executor.
 ///
@@ -52,12 +53,13 @@ pub use futures_lite::future::block_on;
 ///         drop(signal);
 ///     }));
 /// ```
-pub struct Executor<'a, const C: usize = 64> {
-    state: OnceCell<Arc<State<C>>>,
-    _invariant: PhantomData<core::cell::UnsafeCell<&'a ()>>,
+pub struct Executor<'a, Q = BoundQueue> {
+    state: OnceCell<Arc<State<Q>>>,
+    queue_ctor: fn() -> Q,
+    _marker: PhantomData<core::cell::UnsafeCell<&'a ()>>,
 }
 
-impl<'a, const C: usize> Executor<'a, C> {
+impl<'a, Q: ExecutorQueue> Executor<'a, Q> {
     /// Creates a new executor.
     ///
     /// # Examples
@@ -68,9 +70,23 @@ impl<'a, const C: usize> Executor<'a, C> {
     /// let ex: Executor = Default::default();
     /// ```
     pub const fn new() -> Self {
+        Self::new_with(Q::new)
+    }
+
+    /// Creates a new executor with the provided queue constructor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use edge_executor::{Executor, UnboundQueue};
+    ///
+    /// let ex = Executor::new_with(|| { let queue: UnboundQueue = UnboundQueue::with_capacity(100); queue });
+    /// ```
+    pub const fn new_with(queue_ctor: fn() -> Q) -> Self {
         Self {
             state: OnceCell::new(),
-            _invariant: PhantomData,
+            queue_ctor,
+            _marker: PhantomData,
         }
     }
 
@@ -164,7 +180,7 @@ impl<'a, const C: usize> Executor<'a, C> {
     /// ```
     pub async fn run<F>(&self, fut: F) -> F::Output
     where
-        F: Future + Send + 'a,
+        F: Future,
     {
         unsafe { self.run_unchecked(fut).await }
     }
@@ -190,21 +206,9 @@ impl<'a, const C: usize> Executor<'a, C> {
     /// Returns
     /// - `None` - if no task was scheduled for execution
     /// - `Some(Runnnable)` - the first task scheduled for execution. Calling `Runnable::run` will
-    ///    execute the task. In other words, it will poll its future.
+    ///   execute the task. In other words, it will poll its future.
     fn try_runnable(&self) -> Option<Runnable> {
-        let runnable;
-
-        #[cfg(not(feature = "heapless"))]
-        {
-            runnable = self.state().queue.pop();
-        }
-
-        #[cfg(feature = "heapless")]
-        {
-            runnable = self.state().queue.dequeue();
-        }
-
-        runnable
+        self.state().queue.pop()
     }
 
     unsafe fn spawn_unchecked<F>(&self, fut: F) -> Task<F::Output>
@@ -215,20 +219,7 @@ impl<'a, const C: usize> Executor<'a, C> {
             let state = self.state().clone();
 
             move |runnable| {
-                #[cfg(all(not(feature = "heapless"), feature = "unbounded"))]
-                {
-                    state.queue.push(runnable);
-                }
-
-                #[cfg(all(not(feature = "heapless"), not(feature = "unbounded")))]
-                {
-                    state.queue.push(runnable).unwrap();
-                }
-
-                #[cfg(feature = "heapless")]
-                {
-                    state.queue.enqueue(runnable).unwrap();
-                }
+                state.queue.push(runnable);
 
                 if let Some(waker) = state.waker.take() {
                     waker.wake();
@@ -257,19 +248,20 @@ impl<'a, const C: usize> Executor<'a, C> {
     }
 
     /// Returns a reference to the inner state.
-    fn state(&self) -> &Arc<State<C>> {
-        self.state.get_or_init(|| Arc::new(State::new()))
+    fn state(&self) -> &Arc<State<Q>> {
+        self.state
+            .get_or_init(|| Arc::new(State::new((self.queue_ctor)())))
     }
 }
 
-impl<'a, const C: usize> Default for Executor<'a, C> {
+impl<Q: ExecutorQueue> Default for Executor<'_, Q> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-unsafe impl<'a, const C: usize> Send for Executor<'a, C> {}
-unsafe impl<'a, const C: usize> Sync for Executor<'a, C> {}
+unsafe impl<Q: Send> Send for Executor<'_, Q> {}
+unsafe impl<Q: Sync> Sync for Executor<'_, Q> {}
 
 /// A thread-local executor.
 ///
@@ -286,13 +278,12 @@ unsafe impl<'a, const C: usize> Sync for Executor<'a, C> {}
 ///     println!("Hello world!");
 /// }));
 /// ```
-pub struct LocalExecutor<'a, const C: usize = 64> {
-    executor: Executor<'a, C>,
-    _not_send: PhantomData<core::cell::UnsafeCell<&'a Rc<()>>>,
+pub struct LocalExecutor<'a, Q = BoundQueue> {
+    executor: Executor<'a, Q>,
+    _marker: PhantomData<Rc<()>>,
 }
 
-#[allow(clippy::missing_safety_doc)]
-impl<'a, const C: usize> LocalExecutor<'a, C> {
+impl<'a, Q: ExecutorQueue> LocalExecutor<'a, Q> {
     /// Creates a single-threaded executor.
     ///
     /// # Examples
@@ -303,9 +294,22 @@ impl<'a, const C: usize> LocalExecutor<'a, C> {
     /// let local_ex: LocalExecutor = Default::default();
     /// ```
     pub const fn new() -> Self {
+        Self::new_with(Q::new)
+    }
+
+    /// Creates a single-threaded executor with the provided queue constructor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use edge_executor::{LocalExecutor, UnboundQueue};
+    ///
+    /// let local_ex = LocalExecutor::new_with(|| { let queue: UnboundQueue = UnboundQueue::with_capacity(100); queue });
+    /// ```
+    pub const fn new_with(queue_ctor: fn() -> Q) -> Self {
         Self {
-            executor: Executor::<C>::new(),
-            _not_send: PhantomData,
+            executor: Executor::<Q>::new_with(queue_ctor),
+            _marker: PhantomData,
         }
     }
 
@@ -399,31 +403,21 @@ impl<'a, const C: usize> LocalExecutor<'a, C> {
     }
 }
 
-impl<'a, const C: usize> Default for LocalExecutor<'a, C> {
+impl<'a, Q: ExecutorQueue> Default for LocalExecutor<'a, Q> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-struct State<const C: usize> {
-    #[cfg(all(not(feature = "heapless"), feature = "unbounded"))]
-    queue: crossbeam_queue::SegQueue<Runnable>,
-    #[cfg(all(not(feature = "heapless"), not(feature = "unbounded")))]
-    queue: crossbeam_queue::ArrayQueue<Runnable>,
-    #[cfg(feature = "heapless")]
-    queue: heapless::mpmc::MpMcQueue<Runnable, C>,
+struct State<Q> {
+    queue: Q,
     waker: AtomicWaker,
 }
 
-impl<const C: usize> State<C> {
-    fn new() -> Self {
+impl<Q> State<Q> {
+    const fn new(queue: Q) -> Self {
         Self {
-            #[cfg(all(not(feature = "heapless"), feature = "unbounded"))]
-            queue: crossbeam_queue::SegQueue::new(),
-            #[cfg(all(not(feature = "heapless"), not(feature = "unbounded")))]
-            queue: crossbeam_queue::ArrayQueue::new(C),
-            #[cfg(feature = "heapless")]
-            queue: heapless::mpmc::MpMcQueue::new(),
+            queue,
             waker: AtomicWaker::new(),
         }
     }

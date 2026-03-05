@@ -14,14 +14,13 @@ readme = "README.md"
 default = ["std"]
 std = ["futures-lite/std", "once_cell/std"]
 critical-section = ["once_cell/critical-section", "portable-atomic?/critical-section"]
-portable-atomic = ["heapless", "dep:portable-atomic", "portable-atomic-util", "heapless?/portable-atomic", "atomic-waker/portable-atomic", "async-task/portable-atomic"]
-unbounded = []
+portable-atomic = ["dep:portable-atomic", "portable-atomic-util", "heapless/portable-atomic", "atomic-waker/portable-atomic", "async-task/portable-atomic"]
 
 [dependencies]
-heapless = { version = "0.8", default-features = false, optional = true }
+heapless = { version = "0.9", default-features = false }
+embassy-sync = { version = "0.7", default-features = false }
 portable-atomic = { version = "1.4", optional = true }
 portable-atomic-util = { version = "0.1", default-features = false, features = ["alloc"], optional = true }
-crossbeam-queue = { version = "0.3", default-features = false, features = ["alloc"] }
 async-task = { version = "4.4.5", default-features = false }
 atomic-waker = { version = "1", default-features = false }
 futures-lite = { version = "1", default-features = false }
@@ -34,7 +33,8 @@ criterion = { version = "0.4.0", default-features = false, features = ["cargo_be
 easy-parallel = "3.1.0"
 fastrand = "2.0.0"
 once_cell = "1.18.0"
+critical-section = { version = "1", features = ["std"] }
 
-# [[bench]]
-# name = "executor"
-# harness = false
+[[bench]]
+name = "executor"
+harness = false
