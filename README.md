@@ -8,6 +8,8 @@ This crate ships a minimal async executor suitable for microcontrollers and embe
 
 A `no_std` drop-in replacement for [smol](https://github.com/smol-rs/smol)'s [async-executor](https://github.com/smol-rs/async-executor), with the implementation being a thin wrapper around [smol](https://github.com/smol-rs/smol)'s [async-task](https://github.com/smol-rs/async-task) as well.
 
+Works on RTOSes where threads are generally having multiple priorities, which [makes async-executor unsuitable, due to priority-inversion issues with its executor queue](https://github.com/crossbeam-rs/crossbeam/issues/675#issuecomment-4003522816).
+
 ## Examples
 
 ```rust
@@ -101,7 +103,7 @@ fn main() {
   - For a `no_std` *and* "no_alloc" executor, look at [embassy-executor](https://github.com/embassy-rs/embassy/tree/main/embassy-executor), which statically pre-allocates all tasks.
 - Works on targets which have no `core::sync::atomic` support, thanks to [portable-atomic](https://github.com/taiki-e/portable-atomic);
 - Does not assume an RTOS and can run completely bare-metal too;
-- Lockless, atomic-based, bounded task queue by default, which works well for waking the executor directly from an ISR on e.g. FreeRTOS or ESP-IDF (unbounded also an option with feature `unbounded`, yet that might mean potential allocations in an ISR context, which should be avoided).
+- Pluggable executor queue; two lockful default implementations suitable for RTOSes like FreeRTOS and ESP-IDF where threads can have priorities.
 
 ### Great features carried over from [async-executor](https://github.com/smol-rs/async-executor):
 
