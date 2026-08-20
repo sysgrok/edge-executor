@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-08-20
 * Potential fix for #3 (long running futures eventually stall):
   * Background:
     * Turns out this is likely related to ALL executor queues used by this crate (`crossbeam-queue`, `heapless MPMC`) being incompatible with OSes spawning threads at different priorities (since these queues do not use the OS mutexes, they are amenable to priority inversion issues - https://github.com/crossbeam-rs/crossbeam/issues/675#issuecomment-4003522816)
